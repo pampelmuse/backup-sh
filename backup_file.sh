@@ -53,7 +53,7 @@ Options:
  -W <# days>     number of DAYS to keep the weekly backups (default: [$keep_days_weekly])
  -M <# days>     number of DAYS to keep the monthly backups (default: [$keep_days_monthly])
  -i <text>       infotext added to the "Start" and "Stop" log entries (default: none)
- -z              do a dry-run (adds '--dry-run' to the rsync call)
+ -z              do a dry-run (adds '--dry-run' to the rsync call and sets -vvv)
 
  -s and -d are mandatory, all other options have some defaults set.
 
@@ -75,35 +75,45 @@ Exit codes:
 
 How does it work:
  $(basename $0) will create subdirs in the (-d) backup root
- to hold daily, weekly and monthly backups, and within these
- subdirectories again directories for each of the backups.
+ to hold daily, weekly and monthly backups.
  
- In the daily subdir, a "latest" symlink points to the latest backup.
+ Then it will create a subdir in "daily" for the backup it is about
+ to make and does the backup. Once the backup is completed, it will
+ create a "latest" symlink in "daily" pointing to the backup just
+ taken.
+
+ As the next step, $(basename $0) deletes daily backups older than
+ the configured holding time for daily backups.
+
+ For all backups being made on Mondays, $(basename $0) creates copies
+ in the "weekly" subdir, and for all backups taken on the 1st of a 
+ month a copy is placed in "monthly".
+
+ And again weekly and monthly backups older than the holding time
+ will be removed.
 
  Resulting directory structure looks like
 
  <Backup Root>
  |
  +--daily
- |   |
- |   +--latest --> 2015-04-02.223000
+ |   +--latest --> ./2015-04-02.223000
  |   +--2015-03-30.223000
  |   +--2015-03-31.223000
  |   +--2015-04-01.223000
  |   +--2015-04-02.223000
  |
  +--weekly
- |   |
- |   +--2015-03-30.223000
+ |   +--2015-03-30.223000 (2015-03-30 is a Monday)
  |
  +--monthly
-     |
      +--2015-04-01.223000
 
- (weekly backups are created Mondays, monthly ones on each first of the month)
-
- $(basename $0) will then do the backups, and purge old backups which reached
- end of life.
+ $(basename $0) uses rsync's "hard link" feature to deduplicate on
+ file level (rsync --link-dest). If a file didn't change since the
+ last backup, it will not copy it over again, but create a hard link
+ to the already  existing backup copy. Same for the weekly and monthly
+ backups.
 
 End_Of_Help
 }
@@ -202,6 +212,7 @@ while getopts hvs:d:D:W:M:i:z opt; do
         ;;
     z)
         dryrun=true
+        log_verbosity=$((log_verbosity + 3))
         ;;
   esac
 done
