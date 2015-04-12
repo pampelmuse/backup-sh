@@ -1,11 +1,32 @@
 #!/bin/bash
+#===============================================================================
+#
+#          FILE: backup_file.sh
+# 
+#         USAGE: ./backup_file.sh -s /path/to/source -d /path/to/backup/root
+# 
+#   DESCRIPTION: Backup using rsync, with daily/weekly/monthly backup support
+# 
+#       OPTIONS: backup_file.sh -h will tell
+#  REQUIREMENTS: find, rm, rsync, mkdir, rm, logger (optional)
+#          BUGS: ---
+#         NOTES: ---
+#        AUTHOR: Bernd Giegerich (bgi), Bernd.A.Giegerich@gmail.com
+#       CREATED: 12.04.2015 14:34:43 CEST
+#      REVISION: 1.0.0
+#===============================================================================
 
-# ############################################################################
-# Defaults (can be overwritten by options)
-# ############################################################################
+#===============================================================================
+#  GLOBAL DECLARATIONS
+#===============================================================================
+dryrun=false
+src_root=''
+dst_root=''
 
-# for how long (in days) should we keep daily, weekly and
-# monthly backups
+#===============================================================================
+#  DEFAULTS
+#===============================================================================
+# for how long (in days) should we keep daily, weekly and monthly backups
 keep_days_daily=14
 keep_days_weekly=190
 keep_days_monthly=36500
@@ -26,35 +47,32 @@ log_facility='local7'
 log_tag=`basename $0`
 log_verbosity=0
 
-# don't do the real backup, add '--dry-run' to the rsync call
-dryrun=false
+#===============================================================================
+#  FUNCTION DEFINITIONS
+#===============================================================================
 
-# source directory to backup
-src_root=''
-
-# destination root - backups will go to $dst_root/daily
-# (and copies to $dst_root/weekly and $dst_root/monthly)
-dst_root=''
-
-# ############################################################################
-# Nothing to configure beyond this point
-# ############################################################################
-
-# ----------------------------------------------------------------------------
-# short usage info
+#---  FUNCTION  ----------------------------------------------------------------
+#          NAME:  help
+#   DESCRIPTION:  prints a short usage info
+#    PARAMETERS:  none
+#       RETURNS:  nothing
+#-------------------------------------------------------------------------------
 help ()
 {
 cat <<End_Of_Help
 Usage:
     $(basename $0) -h
- or $(basename $0) [options]
+ or $(basename $0) [options] -s </directory/to/backup> -d </backup/root>
 
 Options:
+
  -h              print this usage info and exit with exit code 1
- -l <facility>   log facility to use (default: [$log_facility])
- -v              increase verbosity (up to 3x)
+
  -s <directory>  source directory
  -d <directory>  destination directory (backup root, see below)
+
+ -l <facility>   log facility to use (default: [$log_facility])
+ -v              increase verbosity (up to 3x)
  -D <# days>     number of days to keep the daily backups (default: [$keep_days_daily])
  -W <# days>     number of days to keep the weekly backups (default: [$keep_days_weekly])
  -M <# days>     number of days to keep the monthly backups (default: [$keep_days_monthly])
@@ -127,21 +145,26 @@ How does it work:
 End_Of_Help
 }
 
-# ############################################################################
-# some auxiliary functions
-# ############################################################################
-
-# ----------------------------------------------------------------------------
-# returnes the name of a weekday
+#---  FUNCTION  ----------------------------------------------------------------
+#          NAME:  Name_of_Weekday
+#   DESCRIPTION:  Returns the name of the n-th day in the week (1-7, 1=Monday)
+#    PARAMETERS:  $1 - int, Number of the week day
+#       RETURNS:  string: Name of the day
+#-------------------------------------------------------------------------------
 Name_of_Weekday ()
 {
     local day_number=$1
-    local weekdays=(DONT_USE_ZERO Monday Tuesday Wednesday Thursday Friday Saturday Sunday)
+    local weekdays=(NO_ZERO
+        Monday Tuesday  Wednesday Thursday Friday Saturday Sunday )
     echo ${weekdays[$day_number]}
 }
 
-# ----------------------------------------------------------------------------
-# removes trailing slashes
+#---  FUNCTION  ----------------------------------------------------------------
+#          NAME:  Clean_Dir_Name
+#   DESCRIPTION:  Removes trailing slashes (if any) from a string
+#    PARAMETERS:  $1 - string, Directory name (with or without trailing slash(es))
+#       RETURNS:  string: Directory name without trailing slash
+#-------------------------------------------------------------------------------
 Clean_Dir_Name ()
 {
     local extglob_not_set=false
@@ -150,31 +173,50 @@ Clean_Dir_Name ()
     $extglob_not_set && shopt -u extglob
 }
 
-# ----------------------------------------------------------------------------
-# simple logging.
-# Uses logger if available, does simple print to stderr otherwise
-if bin_logger=$(which logger); then
-    my_logger ()
-    {
-        local log_prio=$1
-        shift
+#---  FUNCTION  ----------------------------------------------------------------
+#          NAME:  My_Logger
+#   DESCRIPTION:  logs per logger (if available), by printing to STDERR otherwise
+#    PARAMETERS:  $1 - string, log prio (whatever is understood by logger)
+#                 $2-* Message to log
+#                 $log_facility - Log facility to use (e.g. 'local7')
+#                 $log_tag - tag to add to your log entry
+#       RETURNS:  nothing
+#-------------------------------------------------------------------------------
+My_Logger ()
+{
+    local log_prio=$1
+    shift
+    if bin_logger=$(which logger); then
         $bin_logger --stderr --tag $log_tag --priority ${log_facility}.${log_prio} "$*"
-    }
-else
-    my_logger ()
-    {
-        local log_prio=$1
-        shift
+    else
         printf '[%s] %s - %s: %s\n' "$(date +'%Y-%m-%d %H:%M:%S')" "$log_tag" "$log_prio" "$*" >&2
-    }
-fi
-log_e () {                             my_logger "err"    "$*" ; }
-log_n () { [ $log_verbosity -ge 1 ] && my_logger "notice" "$*" ; }
-log_i () { [ $log_verbosity -ge 2 ] && my_logger "info"   "$*" ; }
-log_d () { [ $log_verbosity -ge 3 ] && my_logger "debug"  "$*" ; }
+    fi
+}
 
-# ----------------------------------------------------------------------------
-# clean out old backup dirs
+#---  FUNCTION  ----------------------------------------------------------------
+#          NAME:  log_e,
+#                 log_n
+#                 log_i
+#                 log_d
+#   DESCRIPTION:  log per my_logger on err, notice, info or debug level
+#                 $* Message to log
+#                 $log_verbosity - the functions only log, if their debug
+#                                  level is met
+#       RETURNS:  nothing
+#-------------------------------------------------------------------------------
+log_e () {                             My_Logger "err"    "$*" ; }
+log_n () { [ $log_verbosity -ge 1 ] && My_Logger "notice" "$*" ; }
+log_i () { [ $log_verbosity -ge 2 ] && My_Logger "info"   "$*" ; }
+log_d () { [ $log_verbosity -ge 3 ] && My_Logger "debug"  "$*" ; }
+
+#---  FUNCTION  ----------------------------------------------------------------
+#          NAME:  Purge_Ourdated_Backups
+#   DESCRIPTION:  Deletes direct subdirs older than the given number of days
+#    PARAMETERS:  $1 - string, directory to search for sub dirs in
+#                 $2 - int, min age (in days) of directories to delete
+#                 $dryrun - bool, will not delete anything if dryrun == <true>
+#       RETURNS:  nothing
+#-------------------------------------------------------------------------------
 Purge_Outdated_Backups ()
 {
     local search_root="$1"
@@ -193,7 +235,18 @@ Purge_Outdated_Backups ()
     done
 }
 
-# ----------------------------------------------------------------------------
+#---  FUNCTION  ----------------------------------------------------------------
+#          NAME:  Copy_by_Rsync_Link
+#   DESCRIPTION:  Uses rsync to copy a directory, can make use of rsync's
+#                 --link-dest de-duplication functionality
+#    PARAMETERS:  $1 - string, source dir
+#                 $2 - string, destination dir (MUST NOT exist yet)
+#                 $3 - string, optional, link destination dir
+#                 $dryrun - bool, will not copy anything if dryrun == <true>
+#       RETURNS:  0 - success
+#                 1 - error creating destintaion dir
+#              101+ - rsync error (rsync rc + 100)
+#-------------------------------------------------------------------------------
 # copy a directory using rsyncs hard link feature
 Copy_by_Rsync_Link ()
 {
@@ -236,12 +289,34 @@ Copy_by_Rsync_Link ()
     return 0
 }
 
-# ############################################################################
-# main functionality
-# ############################################################################
+#---  FUNCTION  ----------------------------------------------------------------
+#          NAME:  Create_Staging_Directory
+#   DESCRIPTION:  Used to create the daily/weekly/monthly sub dirs
+#    PARAMETERS:  $1 - directory to create
+#       RETURNS:  0 - everything ok
+#                 5 - Unable to create the directory
+#                 6 - Directory exists, but is not writable
+#-------------------------------------------------------------------------------
+Create_Staging_Directory ()
+{
+    local dir_to_create=$(Clean_Dir_Name "$1");
 
-# ----------------------------------------------------------------------------
-# get our options
+    if [ ! -d "$dir_to_create" ]; then
+        log_n "Backup subdir [$dir_to_create] does not yet exist, creating..."
+        mkdir "${dir_to_create}" || {
+            log_e "Unable to create the daily backup subdir [$dir_to_create], mkdir rc [$?]"
+            return 5
+        }
+    fi
+    if [ ! -w "$dir_to_create" ]; then
+        log_e "Backup subdir [$dir_to_create] exists, but is not writable to me"
+        return 6
+    fi
+}
+
+#===============================================================================
+#  COMMAND LINE PROCESSING
+#===============================================================================
 OPTIND=1
 while getopts hvs:d:D:W:M:w:m:i:z opt; do
     case $opt in
@@ -289,13 +364,6 @@ while getopts hvs:d:D:W:M:w:m:i:z opt; do
 done
 shift $((OPTIND - 1))
 
-# ----------------------------------------------------------------------------
-# log parameters
-if [ -z "$infotext" ]; then
-    log_n "Start..."
-else 
-    log_n "Start $infotext..."
-fi
 day_weekly_name=$(Name_of_Weekday "$day_weekly")
 log_d "Options for this run:"
 log_d " -z (dry-run):.......[$dryrun]"
@@ -308,8 +376,17 @@ log_d " -W (keep weekly):...[$keep_days_weekly]"
 log_d " -M (keep monthly):..[$keep_days_monthly]"
 log_d " -i (info text):.....[$infotext]"
 
+#===============================================================================
+#  MAIN SCRIPT
+#===============================================================================
+if [ -z "$infotext" ]; then
+    log_n "Start..."
+else 
+    log_n "Start $infotext..."
+fi
+
 # ----------------------------------------------------------------------------
-# check for directories
+# check for root directories
 src_root=$(Clean_Dir_Name "$src_root")
 dst_root=$(Clean_Dir_Name "$dst_root")
 if [ ! -d "$src_root" ]; then
@@ -330,51 +407,20 @@ if [ ! -w "$dst_root" ]; then
     exit 4
 fi
 
+# ----------------------------------------------------------------------------
+# check for (and create if necessary) backup staging directories
 dst_daily="${dst_root}/daily"
 dst_weekly="${dst_root}/weekly"
 dst_monthly="${dst_root}/monthly"
 log_d "Daily backups dir:...[$dst_daily]"
 log_d "Weekly backups dir:..[$dst_weekly]"
 log_d "Monthly backups dir:.[$dst_monthly]"
-
-if [ ! -d "$dst_daily" ]; then
-    log_n "Daily backup subdir [$dst_daily] does not yet exist, creating..."
-    mkdir "${dst_daily}" || {
-        log_e "Unable to create the daily backup subdir [$dst_daily], mkdir rc [$?]"
-        exit 5
-    }
-fi
-if [ ! -w "$dst_daily" ]; then
-    log_e "Daily backup subdir [$dst_daily] exists, but is not writable to me"
-    exit 6
-fi
-
-if [ ! -d "$dst_weekly" ]; then
-    log_n "Weekly backup subdir [$dst_weekly] does not yet exist, creating..."
-    mkdir "${dst_weekly}" || {
-        log_e "Unable to create the weekly backup subdir [$dst_weekly], mkdir rc [$?]"
-        exit 5
-    }
-fi
-if [ ! -w "$dst_weekly" ]; then
-    log_e "Weekly backup subdir [$dst_weekly] exists, but is not writable to me"
-    exit 6
-fi
-
-if [ ! -d "$dst_monthly" ]; then
-    log_n "Monthly backup subdir [$dst_monthly] does not yet exist, creating..."
-    mkdir "${dst_monthly}" || {
-        log_e "Unable to create the monthly backup subdir [$dst_monthly], mkdir rc [$?]"
-        exit 5
-    }
-fi
-if [ ! -w "$dst_monthly" ]; then
-    log_e "Monthly backup subdir [$dst_monthly] exists, but is not writable to me"
-    exit 6
-fi
+Create_Staging_Directory "$dst_daily"   || exit $?
+Create_Staging_Directory "$dst_weekly"  || exit $?
+Create_Staging_Directory "$dst_monthly" || exit $?
 
 # ----------------------------------------------------------------------------
-# ok, do the backup
+# do the backup
 dst="${dst_daily}/$(date +'%Y-%m-%d.%H%M%S')"
 log_d "Backup destination:..[$dst]"
 
@@ -460,8 +506,9 @@ Purge_Outdated_Backups "$dst_daily"   "$keep_days_daily"
 Purge_Outdated_Backups "$dst_weekly"  "$keep_days_weekly"
 Purge_Outdated_Backups "$dst_monthly" "$keep_days_monthly"
 
-# ----------------------------------------------------------------------------
-# done
+#===============================================================================
+#  STATISTICS AND CLEAN-UP
+#===============================================================================
 if [ -z "$infotext" ]; then
     log_n "Finished..."
 else
