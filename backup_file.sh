@@ -10,6 +10,12 @@ keep_days_daily=14
 keep_days_weekly=190
 keep_days_monthly=36500
 
+# Day of the week to do the weekly backups (1..7; 1 is Monday)
+day_weekly=1
+
+# Day of the month to do the monthly backups
+day_monthly=1
+
 # Infotext appended to the "Start" and "Finished" log entries
 infotext=''
 
@@ -50,10 +56,12 @@ Options:
  -s <directory>  source directory
  -d <directory>  destination directory (backup root, see below)
  -D <# days>     number of days to keep the daily backups (default: [$keep_days_daily])
- -W <# days>     number of DAYS to keep the weekly backups (default: [$keep_days_weekly])
- -M <# days>     number of DAYS to keep the monthly backups (default: [$keep_days_monthly])
+ -W <# days>     number of days to keep the weekly backups (default: [$keep_days_weekly])
+ -M <# days>     number of days to keep the monthly backups (default: [$keep_days_monthly])
  -i <text>       infotext added to the "Start" and "Stop" log entries (default: none)
- -z              do a dry-run (adds '--dry-run' to the rsync call and sets -vvv)
+ -w <week day>   day of the week (1..7; 1=Monday) to do the weekly (default: [$day_weekly])
+ -m <day>        day of the month to do the monthly (default: [$day_monthly])
+ -z              do a dry-run (automatically sets -vvv)
 
  -s and -d are mandatory, all other options have some defaults set.
 
@@ -76,20 +84,21 @@ Exit codes:
 How does it work:
  $(basename $0) will create subdirs in the (-d) backup root
  to hold daily, weekly and monthly backups.
- 
- Then it will create a subdir in "daily" for the backup it is about
- to make and does the backup. Once the backup is completed, it will
- create a "latest" symlink in "daily" pointing to the backup just
- taken.
 
- As the next step, $(basename $0) deletes daily backups older than
+ Then it will create a subdir in "daily" for the backup it is about
+ to make and does the backup.
+
+ Once the backup is completed, it will create/update a "latest" 
+ symlink in "daily" pointing to the backup just taken.
+
+ In the next step, $(basename $0) deletes daily backups older than
  the configured holding time for daily backups.
 
- For all backups being made on Mondays, $(basename $0) creates copies
- in the "weekly" subdir, and for all backups taken on the 1st of a 
- month a copy is placed in "monthly".
+ For all backups being made on the "weekly backup day", $(basename $0)
+ creates copies in the "weekly" subdir, and for all backups taken
+ on the "monthly backup day" in "monthly".
 
- And again weekly and monthly backups older than the holding time
+ And again, weekly and monthly backups older than their holding time
  will be removed.
 
  Resulting directory structure looks like
@@ -112,15 +121,24 @@ How does it work:
  $(basename $0) uses rsync's "hard link" feature to deduplicate on
  file level (rsync --link-dest). If a file didn't change since the
  last backup, it will not copy it over again, but create a hard link
- to the already  existing backup copy. Same for the weekly and monthly
+ to the already existing backup copy. Same for the weekly and monthly
  backups.
 
 End_Of_Help
 }
 
 # ############################################################################
-# some aux functions
+# some auxiliary functions
 # ############################################################################
+
+# ----------------------------------------------------------------------------
+# returnes the name of a weekday
+Name_of_Weekday ()
+{
+    local day_number=$1
+    local weekdays=(DONT_USE_ZERO Monday Tuesday Wednesday Thursday Friday Saturday Sunday)
+    echo ${weekdays[$day_number]}
+}
 
 # ----------------------------------------------------------------------------
 # removes trailing slashes
@@ -157,18 +175,65 @@ log_d () { [ $log_verbosity -ge 3 ] && my_logger "debug"  "$*" ; }
 
 # ----------------------------------------------------------------------------
 # clean out old backup dirs
-Remove_Outdated_Dirs ()
+Purge_Outdated_Backups ()
 {
     local search_root="$1"
     local keep_days="$2"
-    log_d "Removing outdated backups in [$search_root], older then [$keep_days] days"
+    log_d "Removing outdated backups in [$search_root], older than [$keep_days] days"
     for dir_to_remove in $( find $search_root -maxdepth 1 -mindepth 1 -type d -mtime "+$keep_days" ); do
         log_d " - $dir_to_remove"
-        rm -rf "$dir_to_remove" || {
-            rc_rm=$?
-            log_e "Error removing [$dir_to_remove], rm returned rc [$rc_rm]"
-        }
+        if $dryrun; then
+            log_d "   (dry-run, will not remove)"
+        else
+            rm -rf "$dir_to_remove" || {
+                rc_rm=$?
+                log_e "Error removing [$dir_to_remove], rm returned rc [$rc_rm]"
+            }
+        fi
     done
+}
+
+# ----------------------------------------------------------------------------
+# copy a directory using rsyncs hard link feature
+Copy_by_Rsync_Link ()
+{
+    # check for rsync
+    if ! bin_rsync=$(which rsync); then
+        log_e "Unable to find rsync!"
+        exit 8
+    fi
+
+    # src_root=$(Clean_Dir_Name "$src_root")
+    local src_dir=$(Clean_Dir_Name "$1")
+    local dst_dir=$(Clean_Dir_Name "$2")
+    local lnk_dir=$(Clean_Dir_Name "$3")
+    local rsync_parms=""
+
+    if $dryrun; then
+        log_d "   (dry-run, will not create destination)"
+    else
+        mkdir "$dst_dir" || {
+            log_e "Unable to create the destination dir [$dst_dir], mkdir rc [$?]"
+            return 1
+        }
+        rsync_parms+=('-A')   # Archive
+        rsync_parms+=('-a')   # with acls
+        rsync_parms+=('-x')   # with extended attributes
+        [ ! -z $lnk_dir ] && rsync_parms+=("--link-dest=$lnk_dir" )
+        rsync_parms+=("$src_dir/")
+        rsync_parms+=("$dst_dir/")
+
+        log_d "Command is [$bin_rsync ${rsync_parms[@]}]"
+
+        if "$bin_rsync" ${rsync_parms[@]} ;then
+            log_d "Copy created"
+        else
+            rsync_rc=$?
+            log_e "Rsync reported an error, rc [$rsync_rc]!"
+            return $(( $rsync_rc + 100 ))
+        fi
+    fi
+    return 0
 }
 
 # ############################################################################
@@ -178,7 +243,7 @@ Remove_Outdated_Dirs ()
 # ----------------------------------------------------------------------------
 # get our options
 OPTIND=1
-while getopts hvs:d:D:W:M:i:z opt; do
+while getopts hvs:d:D:W:M:w:m:i:z opt; do
     case $opt in
     h)
         help
@@ -210,6 +275,12 @@ while getopts hvs:d:D:W:M:i:z opt; do
     i)
         infotext=$OPTARG
         ;;
+    w)
+        day_weekly=$OPTARG
+        ;;
+    m)
+        day_monthly=$OPTARG
+        ;;
     z)
         dryrun=true
         log_verbosity=$((log_verbosity + 3))
@@ -225,9 +296,13 @@ if [ -z "$infotext" ]; then
 else 
     log_n "Start $infotext..."
 fi
+day_weekly_name=$(Name_of_Weekday "$day_weekly")
 log_d "Options for this run:"
+log_d " -z (dry-run):.......[$dryrun]"
 log_d " -s (source dir):....[$src_root]"
 log_d " -d (backup root):...[$dst_root]"
+log_d " -w (weekly day): ...[$day_weekly] -> [$day_weekly_name]"
+log_d " -m (monthly day):...[$day_monthly]"
 log_d " -D (keep daily):....[$keep_days_daily]"
 log_d " -W (keep weekly):...[$keep_days_weekly]"
 log_d " -M (keep monthly):..[$keep_days_monthly]"
@@ -298,142 +373,92 @@ if [ ! -w "$dst_monthly" ]; then
     exit 6
 fi
 
-dst="${dst_daily}/$(date +'%Y-%m-%d.%H%M%S')"
-log_d "Backup destination:..[$dst]"
-mkdir "${dst}" || {
-    log_e "Unable to create the dir for this backup [$dst], mkdir rc [$?]"
-    exit 7
-}
-
-dst_link=''
-if [ -e "$dst_daily/latest/" ]; then
-    dst_link="$dst_daily/latest/"
-fi
-
 # ----------------------------------------------------------------------------
 # ok, do the backup
-if ! bin_rsync=$(which rsync); then
-    log_e "Unable to find rsync!"
-    exit 8
-fi
+dst="${dst_daily}/$(date +'%Y-%m-%d.%H%M%S')"
+log_d "Backup destination:..[$dst]"
 
-rsync_parms=""
-rsync_parms+=('-A')   # Archive
-rsync_parms+=('-a')   # with acls
-rsync_parms+=('-x')   # with extended attributes
-if [ ! -z $dst_link ]; then
-    rsync_parms+=("--link-dest=$dst_link" )
-fi
-$dryrun && rsync_parms+=("--dry-run")
-rsync_parms+=("$src_root/")
-rsync_parms+=("$dst/")
+dst_link=''
+[ -e "$dst_daily/latest/" ] && dst_link="$dst_daily/latest/"
 
-log_d "Command is [" "$bin_rsync" ${rsync_parms[@]} "]"
-"$bin_rsync" ${rsync_parms[@]} || {
-    rsync_rc=$?
-    log_e "Rsync reported an error, rc [$rsync_rc]!"
-    exit $(( rsync_rc + 100 ))
+Copy_by_Rsync_Link "$src_root" "$dst" "$dst_link" || {
+    rc_backup=$?
+    log_e "Error backing up, check the logs!"
+    [ $rc_backup -ge 100 ] && exit $rc_backup
+    exit 7
 }
 
 # ----------------------------------------------------------------------------
 # creating/updating "latest" link
 link_destination="$dst_daily/latest"
+log_d "Updating 'latest' link in daily"
+
 if [ -e "$link_destination" ]; then
-    rm "$link_destination" || {
-        rm_rc=$?
-        log_e "error removing the 'latest' link, rc [$rm_rc]!"
-        exit 9
-    }
+    log_d "Old link found, removing"
+    if ! $dryrun; then
+        rm "$link_destination" || {
+            rm_rc=$?
+            log_e "error removing the 'latest' link, rc [$rm_rc]!"
+            exit 9
+        }
+    else
+        log_d "   (dry-run, will not delete old link)"
+    fi
+else
+    log_d "No old link found"
 fi
+
 link_source=$(basename $dst)
 ln_parms=""
 ln_parms+=('-s')   # symlink
 ln_parms+=("$link_source/")
 ln_parms+=("$link_destination")
-log_d "Command is [" "ln" ${ln_parms[@]} "]"
-ln ${ln_parms[@]} || {
-    ln_rc=$?
-    log_e "ln reported an error, rc [$ln_rc]!"
-    exit 10
-}
+log_d "Command is [ln ${ln_parms[@]}]"
+if ! $dryrun; then
+    ln ${ln_parms[@]} || {
+        ln_rc=$?
+        log_e "ln reported an error, rc [$ln_rc]!"
+        exit 10
+    }
+else
+    log_d "   (dry-run, will not create new link)"
+fi
 
 # ----------------------------------------------------------------------------
-# remove outdated daily backups
-Remove_Outdated_Dirs "$dst_daily" "$keep_days_daily"
-
-# ----------------------------------------------------------------------------
-# copy backups to weekly dir on Mondays
-weekday=`date +%u`
-if [ "$weekday" -eq "1" ]; then
-    log_d "Monday - creating a copy in weekly"
+# copy backups to weekly dir on the "weekly" day
+if [ $(date +%u) -ne "$day_weekly" ]; then
+    log_d "Not a $day_weekly_name, no weekly backups today"
+else
+    log_d "$day_weekly_name - creating a copy in weekly"
 
     wdst="${dst_weekly}/$(basename $dst)"
     log_d "Weekly backup dir:..[$wdst]"
-    if mkdir "${wdst}"; then
-        unset rsync_parms
-        rsync_parms=""
-        rsync_parms+=('-A')   # Archive
-        rsync_parms+=('-a')   # with acls
-        rsync_parms+=('-x')   # with extended attributes
-        if [ ! -z $dst_link ]; then
-            rsync_parms+=("--link-dest=$dst" )
-        fi
-        $dryrun && rsync_parms+=("--dry-run")
-        rsync_parms+=("$dst/")
-        rsync_parms+=("$wdst/")
 
-        log_d "Command is [" "$bin_rsync" ${rsync_parms[@]} "]"
-        "$bin_rsync" ${rsync_parms[@]} || {
-            rsync_rc=$?
-            log_e "Rsync reported an error, rc [$rsync_rc]!"
-        }
-    else
-        log_e "Unable to create the weekly dir [$wdst], mkdir rc [$?]"
-    fi
-else
-    log_d "Not a Monday, no weekly backups today"
+    Copy_by_Rsync_Link "$dst" "$wdst" "$dst" || {
+        log_e "Error creating weekly backup"
+    }
 fi
 
 # ----------------------------------------------------------------------------
-# remove outdated weekly backups
-Remove_Outdated_Dirs "$dst_weekly" "$keep_days_weekly"
-
-# ----------------------------------------------------------------------------
-# copy backups to monthly dir each first
-day_of_month=`date +%d`
-if [ "$day_of_month" -eq "1" ]; then
-    log_d "First day in month - creating a copy in monthly"
+# copy backups to monthly dir on the "monthly" day
+if [ $(date +%d) -ne "$day_monthly" ]; then
+    log_d "Not the ${day_monthly}., no monthly backups today"
+else
+    log_d "${day_monthly}. day in month - creating a copy in monthly"
 
     mdst="${dst_monthly}/$(basename $dst)"
     log_d "Monthly backup dir:..[$mdst]"
-    if mkdir "${mdst}"; then
-        unset rsync_parms
-        rsync_parms=""
-        rsync_parms+=('-A')   # Archive
-        rsync_parms+=('-a')   # with acls
-        rsync_parms+=('-x')   # with extended attributes
-        if [ ! -z $dst_link ]; then
-            rsync_parms+=("--link-dest=$dst" )
-        fi
-        $dryrun && rsync_parms+=("--dry-run")
-        rsync_parms+=("$dst/")
-        rsync_parms+=("$mdst/")
 
-        log_d "Command is [" "$bin_rsync" ${rsync_parms[@]} "]"
-        "$bin_rsync" ${rsync_parms[@]} || {
-            rsync_rc=$?
-            log_e "Rsync reported an error, rc [$rsync_rc]!"
-        }
-    else
-        log_e "Unable to create the monthly dir [$mdst], mkdir rc [$?]"
-    fi
-else
-    log_d "Not the first of a month, no monthly backups today"
+    Copy_by_Rsync_Link "$dst" "$mdst" "$dst" || {
+        log_e "Error creating monthly backup"
+    }
 fi
 
 # ----------------------------------------------------------------------------
-# remove outdated monthly backups
-Remove_Outdated_Dirs "$dst_monthly" "$keep_days_monthly"
+# Purge old backups
+Purge_Outdated_Backups "$dst_daily"   "$keep_days_daily"
+Purge_Outdated_Backups "$dst_weekly"  "$keep_days_weekly"
+Purge_Outdated_Backups "$dst_monthly" "$keep_days_monthly"
 
 # ----------------------------------------------------------------------------
 # done
