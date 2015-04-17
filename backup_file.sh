@@ -229,7 +229,7 @@ purge_outdated_backups()
 #        If omitted, rsync will be called completely without --link-dest
 # Returns:
 #   rc 0     - operation successfull
-#   rc > 100 - rsync error (substact 100 to get the rsync rc)
+#   rc > 100 - rsync error (subtract 100 to get the rsync rc)
 #   In addition, the function logs errors and some debugging output via log_*
 #-------------------------------------------------------------------------------
 copy_by_rsync_link()
