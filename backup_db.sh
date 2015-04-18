@@ -493,7 +493,7 @@ else
         dump_args+=(${mysql_dump_opts})
         dump_args+=(${db})
 
-        mysqldump "${dump_args[@]}" | gzip > "${backup_dir}/${db}.sql.gz"
+        mysqldump "${dump_args[@]}" | gzip > "${dst}/${db}.sql.gz"
         if [[ $? -eq 0 ]]; then
             log_d "Done with [${db}]"
         else
