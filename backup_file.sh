@@ -7,7 +7,7 @@
 # 2015-04-16  bgi  1.0.0  Initial version
 #-------------------------------------------------------------------------------
 readonly version='1.0.0'
-readonly needed_externals='basename date dirname find ln rm rsync'
+readonly needed_externals='basename date dirname find ln rm rsync touch'
 shopt -s extglob
 
 #===============================================================================
@@ -257,9 +257,11 @@ copy_by_rsync_link()
         log_d "Command is [${program} ${args[@]}]"
 
         if "${program}" "${args[@]}"; then
+            touch "${dst_dir}"
             log_d "Backup successfully created"
         else
             rsync_rc=$?
+            touch "${dst_dir}"
             log_e "Rsync reported an error, rc [$rsync_rc]!"
             return $(( $rsync_rc + 100 ))
         fi

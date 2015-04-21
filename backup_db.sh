@@ -7,8 +7,8 @@
 # 2015-04-18  bgi  1.0.0  Initial version
 #-------------------------------------------------------------------------------
 readonly version='1.0.0'
-readonly needed_externals='awk basename date dirname find gzip ln mkdir rm
-                           rsync sed mysql mysqldump mysqlshow'
+readonly needed_externals='awk basename date dirname find gzip ln mkdir
+                           mysql mysqldump mysqlshow rm rsync sed touch '
 shopt -s extglob
 set -o pipefail
 
@@ -288,9 +288,11 @@ copy_by_rsync_link()
         log_d "Command is [${program} ${args[@]}]"
 
         if "${program}" "${args[@]}"; then
+            touch "${dst_dir}"
             log_d "Backup successfully created"
         else
             rsync_rc=$?
+            touch "${dst_dir}"
             log_e "Rsync reported an error, rc [$rsync_rc]!"
             return $(( $rsync_rc + 100 ))
         fi
